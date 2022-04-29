@@ -447,6 +447,78 @@ class VgmPacker:
 				r.append(v >> 8)
 		return r
 
+	"""
+	class decoderContext:
+		def __init__(self, compressedSource, interleavedSourceOutput):
+			self.index = 4
+			self.unpacked = bytearray()
+			self.compressed = compressedSource
+			self.interleaved = interleavedSourceOutput
+			self.eof = false
+
+		# INTERNAL
+		def _getByte():		
+			byte = self.compressed[self.index]
+			self.index += 1
+			return byte
+
+		def getByteAndWriteConsumedFromSourceToInterleaved:
+			if self.eof:
+				return
+
+			readPtrIndexAtStart = self.index
+
+			token = _getByte()
+			literal_count = token >> 4
+			literal_length = literal_count
+
+			if (literal_count == 15):
+				while True:
+					literal_count = _getByte()
+					literal_length += literal_count
+					if (literal_count != 255):
+						break
+
+			# copy literals
+			for n in range(literal_length):
+				byte = _getByte()
+				self.unpacked.append( byte )
+
+			# compressed data always ends with literals, check for eof here.
+			# mark eof if we've decoded all of the compressed data
+			self.eof = self.index == len(self.compressed)
+			if not self.eof:
+				# now do the match copy
+				match_count = token & 15
+				match_length = match_count + 4
+
+				offset_token = _getByte() # only 1 byte for offset in the LZ48 format
+				offset = len(self.unpacked) - offset_token
+				if (match_count == 15):
+					while True:
+						match_count = _getByte()
+						match_length += match_count
+						if (match_count != 255):
+							break
+
+				# copy match sequence
+				for n in range(match_length):
+					byte = self.unpacked[offset]
+					offset += 1
+					self.unpacked.append(byte)
+
+			readPtrIndexAtEnd = self.index
+
+			# Copy bytes that were consumed
+
+
+	def SimulateUpdate(sourceStreams)
+		streamDecoders = []
+		class streamInfo:
+			pass
+		# sourceStreams is array of streams that are literally just the LZ4 frame for the stream, and whether it's one or two byte data
+		for n in range(len(sourceStreams))
+	"""
 
 	def testUnpackLZ4(self, compressed, uncompressed):
 		unpacked = bytearray()
