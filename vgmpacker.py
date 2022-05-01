@@ -447,78 +447,90 @@ class VgmPacker:
 				r.append(v >> 8)
 		return r
 
-	"""
 	class decoderContext:
 		def __init__(self, compressedSource, interleavedSourceOutput):
 			self.index = 4
 			self.unpacked = bytearray()
 			self.compressed = compressedSource
 			self.interleaved = interleavedSourceOutput
-			self.eof = false
+			self.eof = False
+			self.literalCount = 0
+			self.matchCount = 0
+			self.matchOffset = 0
 
 		# INTERNAL
 		def _getByte():		
 			byte = self.compressed[self.index]
 			self.index += 1
+			if self.index >= len(self.compressed): self.eof = True
 			return byte
 
-		def getByteAndWriteConsumedFromSourceToInterleaved:
+		def fetch_literal():
+			literal = self._getByte()
+			self.unpacked.append(literal)
+			self.literalCount -= 1
+			return literal
+
+		def fetch_match():
+			offset = len(self.unpacked) - self.matchOffset
+			match = self.unpacked[offset]
+			self.unpacked.append(match)
+			self.matchCount -= 1
+			return match
+
+		def fetch_count(firstByteCountValue):
+			accumulated = firstByteCountValue
+			if firstByteCountValue != 15:
+				return firstByteCountValue
+			else:
+				while True:
+					fetched = self._getByte()
+					accumulated += fetched
+					if fetched != 255: break
+			
+			return accumulated
+
+		# This is called once a literal sequence has finished
+		def begin_matches():
+			# first fetch offset
+			self.matchOffset = self._getByte()
+
+			# then length ... HERE!
+			self.matchCount = self.fetch_count(self.matchCount) + 4
+
+		def getByteAndWriteConsumedFromSourceToInterleaved():
 			if self.eof:
 				return
 
 			readPtrIndexAtStart = self.index
 
-			token = _getByte()
-			literal_count = token >> 4
-			literal_length = literal_count
+			# if literal count not zero, fetch literal.
+			# if this was last literal (literal count has dropped to zero)
+			# then begin matches
+			if self.literalCount != 0:
+				literal = self.fetch_literal()
+				if self.literalCount == 0:
+					self.begin_matches()
 
-			if (literal_count == 15):
-				while True:
-					literal_count = _getByte()
-					literal_length += literal_count
-					if (literal_count != 255):
-						break
-
-			# copy literals
-			for n in range(literal_length):
-				byte = _getByte()
-				self.unpacked.append( byte )
-
-			# compressed data always ends with literals, check for eof here.
-			# mark eof if we've decoded all of the compressed data
-			self.eof = self.index == len(self.compressed)
-			if not self.eof:
-				# now do the match copy
-				match_count = token & 15
-				match_length = match_count + 4
-
-				offset_token = _getByte() # only 1 byte for offset in the LZ48 format
-				offset = len(self.unpacked) - offset_token
-				if (match_count == 15):
-					while True:
-						match_count = _getByte()
-						match_length += match_count
-						if (match_count != 255):
-							break
-
-				# copy match sequence
-				for n in range(match_length):
-					byte = self.unpacked[offset]
-					offset += 1
-					self.unpacked.append(byte)
+			elif self.matchCount != 0:
+				match = self.fetch_match()
+			
+			else:
+				token = self._getByte()
+				self.literalCount = self.fetch_count(token >> 4)
+				self.matchCount = token & 15
+				if (self.literalCount != 0):
+					literal = self.fetch_literal()
+				else:
+					self.begin_matches()
+					match = self.fetch_match()
 
 			readPtrIndexAtEnd = self.index
 
 			# Copy bytes that were consumed
+			for n in range(readPtrIndexAtStart, readPtrIndexAtEnd):
+				self.interleavedSourceOutput.append(self.compressed[n])
 
-
-	def SimulateUpdate(sourceStreams)
-		streamDecoders = []
-		class streamInfo:
-			pass
-		# sourceStreams is array of streams that are literally just the LZ4 frame for the stream, and whether it's one or two byte data
-		for n in range(len(sourceStreams))
-	"""
 
 	def testUnpackLZ4(self, compressed, uncompressed):
 		unpacked = bytearray()
@@ -840,6 +852,19 @@ class VgmPacker:
 
 		# write the lz4 compressed file.
 		open(dst_filename, "wb").write( output )
+
+		# TODO: streams array contains the eight lz4-compressed
+		# streams. For each one need to know whether it's
+		# one- or two-byte, also its order of processing.
+		# Then simply do:
+		# - create interleaved byte array
+		# - create 8 decoder contexts
+		# - array of 8 RLE counters
+		# - Loop over 8 streams in order that Beeb processes them.
+		# - DEC RLE counter
+		# - IF got to zero, fetch byte, extract top/bottom ? 4 bits, add one
+		#, that is new counter. If is TWO-BYTE stream fetch a second byte!
+		
 
 
 #------------------------------------------------------------------------
