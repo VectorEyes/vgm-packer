@@ -40,6 +40,7 @@
 
 import functools
 import itertools
+from pickle import decode_long
 import struct
 import sys
 import time
@@ -447,7 +448,7 @@ class VgmPacker:
 				r.append(v >> 8)
 		return r
 
-	class decoderContext:
+	class DecoderContext:
 		def __init__(self, compressedSource, interleavedSourceOutput):
 			self.index = 4
 			self.unpacked = bytearray()
@@ -459,26 +460,26 @@ class VgmPacker:
 			self.matchOffset = 0
 
 		# INTERNAL
-		def _getByte():		
+		def _getByte(self):		
 			byte = self.compressed[self.index]
 			self.index += 1
 			if self.index >= len(self.compressed): self.eof = True
 			return byte
 
-		def fetch_literal():
+		def fetch_literal(self):
 			literal = self._getByte()
 			self.unpacked.append(literal)
 			self.literalCount -= 1
 			return literal
 
-		def fetch_match():
+		def fetch_match(self):
 			offset = len(self.unpacked) - self.matchOffset
 			match = self.unpacked[offset]
 			self.unpacked.append(match)
 			self.matchCount -= 1
 			return match
 
-		def fetch_count(firstByteCountValue):
+		def fetch_count(self, firstByteCountValue):
 			accumulated = firstByteCountValue
 			if firstByteCountValue != 15:
 				return firstByteCountValue
@@ -491,14 +492,14 @@ class VgmPacker:
 			return accumulated
 
 		# This is called once a literal sequence has finished
-		def begin_matches():
+		def begin_matches(self):
 			# first fetch offset
 			self.matchOffset = self._getByte()
 
 			# then length ... HERE!
 			self.matchCount = self.fetch_count(self.matchCount) + 4
 
-		def getByteAndWriteConsumedFromSourceToInterleaved():
+		def getByteAndWriteConsumedFromSourceToInterleaved(self):
 			if self.eof:
 				return
 
@@ -711,17 +712,6 @@ class VgmPacker:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 		# test packer for raw data unsplit
 		if False:
 			stream = bytearray()
@@ -864,7 +854,27 @@ class VgmPacker:
 		# - DEC RLE counter
 		# - IF got to zero, fetch byte, extract top/bottom ? 4 bits, add one
 		#, that is new counter. If is TWO-BYTE stream fetch a second byte!
+
+		streamsProcessingOrder = [3, 7, 0, 1, 2, 4, 5, 6]
+		streamsBytesPerValue = [1, 1, 2, 2, 2, 1, 1, 1]
+
+		interleavedOut = bytearray()
+
+		rleLengths = [1, 1, 1, 1, 1, 1, 1, 1]
+		decoderContexts = []
+		bytesPerValue = []
+
+		for n in range(8):
+			decoderContexts.append(self.DecoderContext(streams[streamsProcessingOrder[n]], interleavedOut))
+			bytesPerValue.append(streamsBytesPerValue[streamsProcessingOrder[n]])
 		
+		while decoderContexts[0].eof != True:
+			for n in range(8):
+				rleLengths[n] -= 1
+				if rleLengths[n] == 0:
+					context = decoderContexts[n]
+					context
+
 
 
 #------------------------------------------------------------------------
