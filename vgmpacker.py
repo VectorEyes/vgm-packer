@@ -40,7 +40,7 @@
 
 import functools
 import itertools
-from pickle import decode_long
+#from pickle import decode_long
 import struct
 import sys
 import time
@@ -474,6 +474,9 @@ class VgmPacker:
 
 		def fetch_match(self):
 			offset = len(self.unpacked) - self.matchOffset
+			if offset >= len(self.unpacked) or offset < 0:
+				print("WARNING in fetch_match! ... len of unpacked is " + str(len(self.unpacked)) + ", offset is " + str(offset) + ", match_offset is " + str(self.matchOffset))
+				print("index: " + str(self.index) + ", matchCount: " + str(self.matchCount) + ", matchOffset: " + str(self.matchOffset))
 			match = self.unpacked[offset]
 			self.unpacked.append(match)
 			self.matchCount -= 1
@@ -505,32 +508,37 @@ class VgmPacker:
 
 			readPtrIndexAtStart = self.index
 
+			toReturn = 0
+
 			# if literal count not zero, fetch literal.
 			# if this was last literal (literal count has dropped to zero)
 			# then begin matches
 			if self.literalCount != 0:
-				literal = self.fetch_literal()
+				toReturn = self.fetch_literal()
 				if self.literalCount == 0:
 					self.begin_matches()
 
 			elif self.matchCount != 0:
-				match = self.fetch_match()
+				toReturn = self.fetch_match()
 			
 			else:
 				token = self._getByte()
 				self.literalCount = self.fetch_count(token >> 4)
 				self.matchCount = token & 15
 				if (self.literalCount != 0):
-					literal = self.fetch_literal()
+					toReturn = self.fetch_literal()
 				else:
 					self.begin_matches()
-					match = self.fetch_match()
+					toReturn = self.fetch_match()
 
 			readPtrIndexAtEnd = self.index
 
 			# Copy bytes that were consumed
 			for n in range(readPtrIndexAtStart, readPtrIndexAtEnd):
-				self.interleavedSourceOutput.append(self.compressed[n])
+				self.interleaved.append(self.compressed[n])
+
+			# Return the actual result byte
+			return toReturn
 
 
 	def testUnpackLZ4(self, compressed, uncompressed):
@@ -866,16 +874,29 @@ class VgmPacker:
 
 		for n in range(8):
 			decoderContexts.append(self.DecoderContext(streams[streamsProcessingOrder[n]], interleavedOut))
-			bytesPerValue.append(streamsBytesPerValue[streamsProcessingOrder[n]])
+			bytesPerValue.append(streamsBytesPerValue[n])
 		
 		while decoderContexts[0].eof != True:
 			for n in range(8):
 				rleLengths[n] -= 1
 				if rleLengths[n] == 0:
 					context = decoderContexts[n]
-					context
+					firstByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
+					rleLengths[n] = firstByte >> 4
+					if bytesPerValue[n] == 2:
+						context.getByteAndWriteConsumedFromSourceToInterleaved()
 
 
+
+		open(dst_filename + ".interleaved", "wb").write( interleavedOut )
+
+		streamSize = 0
+
+		for n in range(8):
+			streamSize += len(decoderContexts[n].compressed)
+
+		print("Sum of stream sizes: " + str(streamSize) + " bytes.")
+		print("Interleaved output size: " + str(len(interleavedOut)) + " bytes." )
 
 #------------------------------------------------------------------------
 # Main()
