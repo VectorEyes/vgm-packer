@@ -526,7 +526,7 @@ class VgmPacker:
 			# then begin matches
 			if self.literalCount != 0:
 				toReturn = self.fetch_literal()
-				if self.literalCount == 0:
+				if self.literalCount == 0 and (not self.eof == True):
 					self.begin_matches()
 
 			elif self.matchCount != 0:
@@ -555,7 +555,7 @@ class VgmPacker:
 			return toReturn
 
 
-	def testUnpackLZ4(self, compressed, uncompressed, streamDebugList):
+	def testUnpackLZ4(self, compressed, uncompressed, streamDebugList, stateDebug):
 		unpacked = bytearray()
 		eof = False
 		debug = False
@@ -597,6 +597,11 @@ class VgmPacker:
 				if debug:
 					print("literal byte copy n=" + str(n) + ", to offset " + str(len(unpacked)) + ", with byte " + str(hex(byte)))
 				unpacked.append( byte )
+				# HERE HERE HERE ... need to change this 'state debug' thing to only print what's impt for the operation being carried out
+				# e.g. if we're copying a literal, we only care about num remaining literals, read index, and what value was copied.
+				# we always care about read index of course.
+				stateDebug.append("ReadIndex:" + str(self.index) + ", UnpackLen:" + str(len(unpacked)) + ",LitCnt:" + str(literal_length - n) + ",MtchCnt:" + str(self.matchCount) + ",MtchOffset:" + str(self.matchOffset))
+
 
 			# compressed data always ends with literals, check for eof here.
 			if debug:
@@ -896,7 +901,8 @@ class VgmPacker:
 		decoderContexts = []
 		bytesPerValue = []
 
-		newStreamDecodeDebug = []
+		newStreamDecodeDebug = [[],[],[],[],[],[],[],[]]
+		stateDbg = [[],[],[],[],[],[],[],[]]
 
 		readIndices = [0] * 8
 
@@ -905,17 +911,19 @@ class VgmPacker:
 			decoderContexts.append(self.DecoderContext(compressedStreams[streamsProcessingOrder[n]], interleavedOut, newStreamDecodeDebug[n]))
 			bytesPerValue.append(streamsBytesPerValue[n])
 		
-		while decoderContexts[0].eof != True:
-			for n in range(8):
+		testStrean = 0
+		while decoderContexts[testStrean].eof != True:
+			for n in range(testStrean, testStrean + 1):
 				rleLengths[n] -= 1
 				print("Stream " + str(n) + " RLE count now " + str(rleLengths[n]))
-				if rleLengths[n] == 0:
-					print("Stream " + str(n) + " decoding " + str(bytesPerValue[n]))
+				if rleLengths[n] == 0 and not (decoderContexts[n].eof == True):
+					print("Stream " + str(n) + " decoding " + str(bytesPerValue[n]) + " bytes")
 					origDbg = origStreamDecodeDebug[streamsProcessingOrder[n]]
 					newDbg = newStreamDecodeDebug[n]	
 					context = decoderContexts[n]
 					firstByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
-					print("Stream " + str(n) + ": After first byte ri: " + str(readIndices[n]) + ", adj context index: " + str(context.index - 4))
+					stateDbg[n].append(context._getDbgState())
+					print("Stream " + str(n) + ": After first byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
 					print("Stream " + str(n) + ": origDbgLen: " + str(len(origDbg)) + ", newDbgLen: " + str(len(newDbg)))
 
 					for ri in range(readIndices[n], context.index - 4):
@@ -923,21 +931,23 @@ class VgmPacker:
 							print("Stream " + str(n) + ": OK -  srcIndex " + str(ri) +": " + origDbg[ri])
 						else:
 							print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
+						assert origDbg[ri] == newDbg[ri]
 
-					readIndices[n] = context.index
+					readIndices[n] = context.index - 4
 
 					rleLengths[n] = (firstByte >> 4) + 1
 					print("Stream " + str(n) + " set RLE length to " + str(rleLengths[n]))
 					if bytesPerValue[n] == 2:
 						secondByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
-						print("Stream " + str(n) + ": After second byte ri: " + str(readIndices[n]) + ", adj context index: " + str(context.index - 4))
+						print("Stream " + str(n) + ": After second byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
 
 						for ri in range(readIndices[n], context.index - 4):
 							if origDbg[ri] == newDbg[ri]:
 								print("Stream " + str(n) + ": OK - srcIndex " + str(ri) +": " + origDbg[ri])
 							else:
 								print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
-						readIndices[n] = context.index
+							assert origDbg[ri] == newDbg[ri]	
+						readIndices[n] = context.index - 4
 
 
 
