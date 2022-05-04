@@ -449,7 +449,7 @@ class VgmPacker:
 		return r
 
 	class DecoderContext:
-		def __init__(self, compressedSource, interleavedSourceOutput):
+		def __init__(self, compressedSource, interleavedSourceOutput, debugOut):
 			self.index = 4
 			self.unpacked = bytearray()
 			self.compressed = compressedSource
@@ -458,22 +458,30 @@ class VgmPacker:
 			self.literalCount = 0
 			self.matchCount = 0
 			self.matchOffset = 0
+			self.debugOut = debugOut
 
 		# INTERNAL
 		def _getByte(self):		
 			byte = self.compressed[self.index]
 			self.index += 1
-			if self.index >= len(self.compressed): self.eof = True
+			if self.index >= len(self.compressed):
+				print("EOF TRUE at index: " + str(self.index))
+				self.eof = True
 			return byte
+
+		def _getDbgState(self):
+			return "ReadIndex:" + str(self.index) + ", UnpackLen:" + str(len(self.unpacked)) + ",LitCnt:" + str(self.literalCount) + ",MtchCnt:" + str(self.matchCount) + ",MtchOffset:" + str(self.matchOffset)
 
 		def fetch_literal(self):
 			literal = self._getByte()
+			self.debugOut.append("Literal," + str(literal))
 			self.unpacked.append(literal)
 			self.literalCount -= 1
 			return literal
 
 		def fetch_match(self):
-			offset = len(self.unpacked) - self.matchOffset
+#			offset = len(self.unpacked) - self.matchOffset
+			offset = len(self.unpacked) - self.matchOffset - 1
 			if offset >= len(self.unpacked) or offset < 0:
 				print("WARNING in fetch_match! ... len of unpacked is " + str(len(self.unpacked)) + ", offset is " + str(offset) + ", match_offset is " + str(self.matchOffset))
 				print("index: " + str(self.index) + ", matchCount: " + str(self.matchCount) + ", matchOffset: " + str(self.matchOffset))
@@ -482,13 +490,15 @@ class VgmPacker:
 			self.matchCount -= 1
 			return match
 
-		def fetch_count(self, firstByteCountValue):
+		def fetch_count(self, firstByteCountValue, dbgPrefix):
 			accumulated = firstByteCountValue
 			if firstByteCountValue != 15:
 				return firstByteCountValue
 			else:
 				while True:
 					fetched = self._getByte()
+					self.debugOut.append(dbgPrefix + "CntExt," + str(fetched))
+
 					accumulated += fetched
 					if fetched != 255: break
 			
@@ -498,9 +508,10 @@ class VgmPacker:
 		def begin_matches(self):
 			# first fetch offset
 			self.matchOffset = self._getByte()
+			self.debugOut.append("Offset," + str(self.matchOffset))
 
 			# then length ... HERE!
-			self.matchCount = self.fetch_count(self.matchCount) + 4
+			self.matchCount = self.fetch_count(self.matchCount, "Match") + 4
 
 		def getByteAndWriteConsumedFromSourceToInterleaved(self):
 			if self.eof:
@@ -523,8 +534,10 @@ class VgmPacker:
 			
 			else:
 				token = self._getByte()
-				self.literalCount = self.fetch_count(token >> 4)
 				self.matchCount = token & 15
+				tokenLiteralCnt = token >> 4
+				self.debugOut.append("Token," + str(tokenLiteralCnt) + "," + str(self.matchCount))
+				self.literalCount = self.fetch_count(tokenLiteralCnt, "Literal")
 				if (self.literalCount != 0):
 					toReturn = self.fetch_literal()
 				else:
@@ -538,10 +551,11 @@ class VgmPacker:
 				self.interleaved.append(self.compressed[n])
 
 			# Return the actual result byte
+			
 			return toReturn
 
 
-	def testUnpackLZ4(self, compressed, uncompressed):
+	def testUnpackLZ4(self, compressed, uncompressed, streamDebugList):
 		unpacked = bytearray()
 		eof = False
 		debug = False
@@ -557,13 +571,17 @@ class VgmPacker:
 				print("new token, unpacked offset=" + str(len(unpacked)))
 			token = getByte()
 			literal_count = token >> 4
+			match_count = token & 15
 			literal_length = literal_count
+			streamDebugList.append("Token," + str(literal_count) + "," + str(match_count))
 			if debug:
 				print("literal_count=" + str(literal_count) + ", literal_length=" + str(literal_length))
 			if (literal_count == 15):
 				while True:
 					literal_count = getByte()
 					literal_length += literal_count
+					streamDebugList.append("LiteralCntExt," + str(literal_count))
+
 					if debug:
 						print("literal_count=" + str(literal_count) + ", literal_length=" + str(literal_length))
 					if (literal_count != 255):
@@ -574,6 +592,8 @@ class VgmPacker:
 				print("copy literals - literal_length=" + str(literal_length))
 			for n in range(literal_length):
 				byte = getByte()
+				streamDebugList.append("Literal," + str(byte))
+
 				if debug:
 					print("literal byte copy n=" + str(n) + ", to offset " + str(len(unpacked)) + ", with byte " + str(hex(byte)))
 				unpacked.append( byte )
@@ -585,7 +605,6 @@ class VgmPacker:
 			eof = self.index == len(compressed)
 			if not eof:
 				# now do the match copy
-				match_count = token & 15
 				match_length = match_count + 4
 				if debug:
 					print("match_count=" + str(match_count) + ", match_length=" + str(match_length))
@@ -594,10 +613,12 @@ class VgmPacker:
 				if debug:
 					print("offset_token=" + str(offset_token))
 				offset = len(unpacked) - offset_token
+				streamDebugList.append("Offset," + str(offset_token))
 				if (match_count == 15):
 					while True:
 						match_count = getByte()
 						match_length += match_count
+						streamDebugList.append("MatchCntExt," + str(match_count))
 						if debug:
 							print("match_count=" + str(match_count) + ", match_length=" + str(match_length))
 
@@ -633,8 +654,6 @@ class VgmPacker:
 	# Convert the given VGM file to a compressd VGC file
 	#----------------------------------------------------------
 	def process(self, src_filename, dst_filename, buffersize = 255, use_huffman = True):
-
-
 
 		# load the VGM file, or alternatively interpret as a binary
 		if src_filename.lower()[-4:] == ".vgm":
@@ -802,14 +821,19 @@ class VgmPacker:
 			output[2] = 0x43
 			output[3] = n
 
+		compressedStreams = []
+
+		origStreamDecodeDebug = []
+
 		# LZ4 Compress the 8 data streams
 		for i in range(len(streams)):
+			origStreamDecodeDebug.append([])
 			#print("lz4 compressing stream #" + str(i))
 			stream = streams[i]
 			compressed_block = lz4.compressBlock( stream )
-			self.testUnpackLZ4(compressed_block, stream)
+			self.testUnpackLZ4(compressed_block, stream, origStreamDecodeDebug[i])
 
-			streams[i] = compressed_block
+			compressedStreams.append(compressed_block)
 
 
 		# Step 3 - Huffcode these streams (optional - better ratio, lower decoder performance)
@@ -822,7 +846,7 @@ class VgmPacker:
 
 			# analyse the compressed data stream
 			compressed_data = bytearray()
-			for s in streams:
+			for s in compressedStreams:
 				compressed_data += s[4:] # skip block headers so we dont add unwanted symbols to the alphabet
 			# build the optimal code tree
 			huffman.build(compressed_data)
@@ -833,15 +857,15 @@ class VgmPacker:
 			output += lz4.compressBlock( header_block )
 
 			# Emit huffman encoded blocks as uncompressed LZ4 blocks
-			for i in range(len(streams)):
-				s = streams[i][4:]
+			for i in range(len(compressedStreams)):
+				s = compressedStreams[i][4:]
 				huffdata = huffman.encode( s, header = False ) # we skip the first 4 bytes of the LZ4 block (the block header)
 				print('   HUF Pack in=' + str(len(s)) + ', out=' + str(len(huffdata)) + ", saving=" + str(len(s)-len(huffdata)) )
 
-				streams[i] = lz4.compressBlock( huffdata )
+				compressedStreams[i] = lz4.compressBlock( huffdata )
 
 		# Step 4 - Serialise the blocks
-		for s in streams:
+		for s in compressedStreams:
 			output += s
 
 		# Step 5 - write the output file
@@ -868,23 +892,52 @@ class VgmPacker:
 
 		interleavedOut = bytearray()
 
-		rleLengths = [1, 1, 1, 1, 1, 1, 1, 1]
+		rleLengths = [1] * 8
 		decoderContexts = []
 		bytesPerValue = []
 
+		newStreamDecodeDebug = []
+
+		readIndices = [0] * 8
+
 		for n in range(8):
-			decoderContexts.append(self.DecoderContext(streams[streamsProcessingOrder[n]], interleavedOut))
+			newStreamDecodeDebug.append([])
+			decoderContexts.append(self.DecoderContext(compressedStreams[streamsProcessingOrder[n]], interleavedOut, newStreamDecodeDebug[n]))
 			bytesPerValue.append(streamsBytesPerValue[n])
 		
 		while decoderContexts[0].eof != True:
 			for n in range(8):
 				rleLengths[n] -= 1
+				print("Stream " + str(n) + " RLE count now " + str(rleLengths[n]))
 				if rleLengths[n] == 0:
+					print("Stream " + str(n) + " decoding " + str(bytesPerValue[n]))
+					origDbg = origStreamDecodeDebug[streamsProcessingOrder[n]]
+					newDbg = newStreamDecodeDebug[n]	
 					context = decoderContexts[n]
 					firstByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
-					rleLengths[n] = firstByte >> 4
+					print("Stream " + str(n) + ": After first byte ri: " + str(readIndices[n]) + ", adj context index: " + str(context.index - 4))
+					print("Stream " + str(n) + ": origDbgLen: " + str(len(origDbg)) + ", newDbgLen: " + str(len(newDbg)))
+
+					for ri in range(readIndices[n], context.index - 4):
+						if origDbg[ri] == newDbg[ri]:
+							print("Stream " + str(n) + ": OK -  srcIndex " + str(ri) +": " + origDbg[ri])
+						else:
+							print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
+
+					readIndices[n] = context.index
+
+					rleLengths[n] = (firstByte >> 4) + 1
+					print("Stream " + str(n) + " set RLE length to " + str(rleLengths[n]))
 					if bytesPerValue[n] == 2:
-						context.getByteAndWriteConsumedFromSourceToInterleaved()
+						secondByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
+						print("Stream " + str(n) + ": After second byte ri: " + str(readIndices[n]) + ", adj context index: " + str(context.index - 4))
+
+						for ri in range(readIndices[n], context.index - 4):
+							if origDbg[ri] == newDbg[ri]:
+								print("Stream " + str(n) + ": OK - srcIndex " + str(ri) +": " + origDbg[ri])
+							else:
+								print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
+						readIndices[n] = context.index
 
 
 
