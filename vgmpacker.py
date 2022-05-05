@@ -38,6 +38,7 @@
 #   
 # It utilises LZ4 and Huffman encoders from https://github.com/simondotm/lz4enc-python
 
+from cgi import print_environ
 import functools
 import itertools
 #from pickle import decode_long
@@ -473,8 +474,10 @@ class VgmPacker:
 			return "ReadIndex:" + str(self.index) + ", UnpackLen:" + str(len(self.unpacked)) + ",LitCnt:" + str(self.literalCount) + ",MtchCnt:" + str(self.matchCount) + ",MtchOffset:" + str(self.matchOffset)
 
 		def fetch_literal(self):
+			prevRI = self.index
 			literal = self._getByte()
-			self.debugOut.append("Literal," + str(literal))
+			nowRI = self.index
+			self.debugOut.append("Literal," + str(literal) + ", LitCnt " + str(self.literalCount) + "->" + str(self.literalCount - 1) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 			self.unpacked.append(literal)
 			self.literalCount -= 1
 			return literal
@@ -555,7 +558,7 @@ class VgmPacker:
 			return toReturn
 
 
-	def testUnpackLZ4(self, compressed, uncompressed, streamDebugList, stateDebug):
+	def testUnpackLZ4(self, compressed, uncompressed, streamDebugList):
 		unpacked = bytearray()
 		eof = False
 		debug = False
@@ -569,7 +572,10 @@ class VgmPacker:
 			if debug:
 				print("")
 				print("new token, unpacked offset=" + str(len(unpacked)))
+			prevRI = self.index
 			token = getByte()
+			newRI = self.index
+			# HERE HERE HERE add prevRI and new RI to the debug out below
 			literal_count = token >> 4
 			match_count = token & 15
 			literal_length = literal_count
@@ -591,17 +597,14 @@ class VgmPacker:
 			if debug:
 				print("copy literals - literal_length=" + str(literal_length))
 			for n in range(literal_length):
+				prevRI = self.index
 				byte = getByte()
-				streamDebugList.append("Literal," + str(byte))
+				nowRI = self.index
+				streamDebugList.append("Literal," + str(byte) + ", LitCnt " + str(literal_length - n) + "->" + str(literal_length - n - 1) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
 				if debug:
 					print("literal byte copy n=" + str(n) + ", to offset " + str(len(unpacked)) + ", with byte " + str(hex(byte)))
 				unpacked.append( byte )
-				# HERE HERE HERE ... need to change this 'state debug' thing to only print what's impt for the operation being carried out
-				# e.g. if we're copying a literal, we only care about num remaining literals, read index, and what value was copied.
-				# we always care about read index of course.
-				stateDebug.append("ReadIndex:" + str(self.index) + ", UnpackLen:" + str(len(unpacked)) + ",LitCnt:" + str(literal_length - n) + ",MtchCnt:" + str(self.matchCount) + ",MtchOffset:" + str(self.matchOffset))
-
 
 			# compressed data always ends with literals, check for eof here.
 			if debug:
