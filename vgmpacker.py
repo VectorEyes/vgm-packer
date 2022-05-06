@@ -38,7 +38,7 @@
 #   
 # It utilises LZ4 and Huffman encoders from https://github.com/simondotm/lz4enc-python
 
-from cgi import print_environ
+#from cgi import print_environ
 import functools
 import itertools
 #from pickle import decode_long
@@ -77,8 +77,8 @@ class VgmPacker:
 	# returns array of 11 bytearrays
 	def split_raw(self, rawData, stripCommands = True):
 
-		registers = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-		registers_opt = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+		registers = [ 0 ] * 11 
+		registers_opt = [ 0 ] * 11
 
 		latched_channel = -1
 
@@ -711,7 +711,6 @@ class VgmPacker:
 			data_offset += data_block[data_offset]+1
 			data_offset += data_block[data_offset]+1
 
-
 			print("header_size=" +str(header_size))
 			print("play_rate="+str(play_rate))
 			print("packet_count="+str(packet_count))
@@ -924,6 +923,12 @@ class VgmPacker:
 
 		interleavedOut = bytearray()
 
+		#Start with "VGX" and then 0x00. Ie 0x56, 0x47, 0x58, 0x00
+		interleavedOut.append(0x56) # V
+		interleavedOut.append(0x47) # G
+		interleavedOut.append(0x58) # X
+		interleavedOut.append(0x00) # 'Version' field. Version 0 of VGX file format must have this set to 0
+
 		rleLengths = [1] * 8
 		decoderContexts = []
 		bytesPerValue = []
@@ -976,8 +981,6 @@ class VgmPacker:
 								print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
 							assert origDbg[ri] == newDbg[ri]	
 						readIndices[n] = context.index - 4
-
-
 
 		open(dst_filename + ".interleaved", "wb").write( interleavedOut )
 
