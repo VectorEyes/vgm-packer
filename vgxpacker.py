@@ -38,10 +38,8 @@
 #   
 # It utilises LZ4 and Huffman encoders from https://github.com/simondotm/lz4enc-python
 
-#from cgi import print_environ
 import functools
 import itertools
-#from pickle import decode_long
 import struct
 import sys
 import time
@@ -54,14 +52,11 @@ from modules.lz4enc import LZ4
 from modules.huffman import Huffman
 from modules.vgmparser import VgmStream
 
-class VgmPacker:
+class VgxPacker:
 
 	# pack options
-	HIGH_COMPRESSION = False # enable 2kb sliding window with 16-bits instead of 255 byte, overridden by LZ48
-	LZ48 = True	# enable 8 bit LZ4 mode
 	OUTPUT_RAWDATA = False # output raw dumps of the data that was compressed by LZ4/Huffman
 	RLE = True # always set now.
-	ENABLE_HUFFMAN = True # optional
 	VERBOSE = True
 
 	def __init__(self):
@@ -685,7 +680,7 @@ class VgmPacker:
 	# Process(filename)
 	# Convert the given VGM file to a compressd VGC file
 	#----------------------------------------------------------
-	def process(self, src_filename, dst_filename, buffersize = 255, use_huffman = True):
+	def process(self, src_filename, dst_filename):
 
 		# load the VGM file, or alternatively interpret as a binary
 		if src_filename.lower()[-4:] == ".vgm":
@@ -729,80 +724,35 @@ class VgmPacker:
 		# Begin VGM packer suite
 		#----------------------------------------------------------
 
-		# Ok the definitive packed VGM format is:
+		# Ok the definitive packed VGX format is:
 		# 1. Register data split into 8 streams, 3x 16-bit tones, 1x 8-bit channel3 tones 4x 8-bit volumes.
 		# 2. Register command bits are stripped
 		# 3. Channel3 tone stream replaces runs with 0x0F to signal no change, plus 0x08 is appended as an EOF marker
 		# 4. All 8 streams are RLE compressed, using top 4bits as run length
-		# 5. Output stream is LZ4 frame/block format
-		# 6. All 8 streams are LZ4 compressed using 255 match distance and 8-bit offsets at maximum optimal parser setting
-		# 7. All 8 streams are optionally huffman compressed
-		# 8. The LZ4 magic number is altered from [04 22 4d 18] to [56 47 43 00] (so that it is no longer seen as LZ4 compatible) [byte 3 bit6=1=LZ4-16bit, =0=LZ4-8bit]
-		# 9. If huffman is applied, the magic number is [56 47 43 80] [byte 3 bit7=1=+Huffman]
-		# We might be able to support 16-bit offsets later. WIP/TODO. Magic number would be [56 47 43 40] (plain LZ4) or [56 47 43 C0] with huffman
-
-
+		# 5. All 8 streams are LZ4 compressed using 255 match distance and 8-bit offsets at maximum optimal parser setting
+		# 6. Streams are then decoded and 'played back' as if the stateful BBC Micro 'VGX Player' was playing them,
+		#    that is, we simulate frames of playback, look at the stream state for each stream in turn, in the same
+		#    order that the player processes them, do RLE countdowns, request new unpacked bytes as necessary,
+		#    and record the exact order in which bytes were pulled from the eight *compressed* streams into a new
+		#    buffer that is an interleaved version of the eight original compressed streams.
+		# 7. This interleaved buffer, prepended with the magic number "VGXn" (n = 0) is output as a .VGX file.
+		
+		# Unlike VGM format on which this is based, VGX...
+		# - ... has no LZ4 frame or LZ4 block headers.
+		# - ... does not support additional Huffman compression.
+		# - ... does not provide an option to control the match window size, it is locked at 255
+		# - ... and there are no plans to look into 16-bit offsets.
+		
 
 		lz4 = LZ4()
-		level = 9
-		#window = 255 # this is for 8-bit machines after all
-		lz4.setCompression(level)#, window)
 		# enable the high compression mode
-		if buffersize < 256: #self.LZ48:
-			lz4.optimizedCompression(True)
-		else:
-			# high compression mode, requires 16Kb workspace but crunches like a boss.
-			lz4.setCompression(level, buffersize)
-			lz4.optimizedCompression(False)
-			#if self.HIGH_COMPRESSION: 
-			#	windowsize = 2048
-			#	lz4.setCompression(level, windowsize)
-			#	lz4.optimizedCompression(False)
-
-
-
+		lz4.setCompression(9)
+		lz4.optimizedCompression(True)
 
 		#----------------------------------------------------------
 		# Unpack the register data into 11 separate data streams
 		#----------------------------------------------------------
 		registers = self.split_raw(data_block, True)
-
-
-
-
-		# test packer for raw data unsplit
-		if False:
-			stream = bytearray()
-			for i in range(len(registers[0])):
-				for r in range(len(registers)):
-					stream.append(registers[r][i])
-
-			output = bytearray()					
-			lz4.beginFrame(output)
-
-			# re-write LZ4 magic number if incompatible
-			if self.LZ48 or use_huffman: #self.ENABLE_HUFFMAN:
-				n = 0x00
-				if use_huffman: #self.ENABLE_HUFFMAN:
-					n |= 0x80
-				output[0] = 0x56
-				output[1] = 0x47
-				output[2] = 0x43
-				output[3] = n
-
-			# LZ4 Compress the 8 data stream
-			compressed_block = lz4.compressBlock( stream )
-			self.testUnpackLZ4(compressed_block, stream)
-			output += compressed_block
-
-			# Step 5 - write the output file
-			lz4.endFrame(output)
-			self.report(lz4, data_block, output, 8, "Paired 8 register blocks [01][23][45][6][7][8][9][A] WITH register masks ")
-
-			# write the lz4 compressed file.
-			open("simon.vgc", "wb").write( output )
-
-
 
 		#------------------------------------------------------------------------------
 		# Construct the optimal VGC file format output
@@ -815,7 +765,6 @@ class VgmPacker:
 				if noise > 7:
 					print(" - Found invalid noise register setting of " + str(noise) + ", at offset " + str(n))
 					invalid_noise_range = True
-
 
 		# Step 1 - reformat the register data streams
 		streams = []
@@ -843,68 +792,37 @@ class VgmPacker:
 		lz4.beginFrame(output)
 
 		# re-write LZ4 magic number if incompatible
-		if self.LZ48 or use_huffman: #self.ENABLE_HUFFMAN:
-			n = 0x00
-			if use_huffman: #self.ENABLE_HUFFMAN:
-				n |= 0x80
-			output[0] = 0x56
-			output[1] = 0x47
-			output[2] = 0x43
-			output[3] = n
+#		if self.LZ48 or use_huffman: #self.ENABLE_HUFFMAN:
+#			n = 0x00
+#			if use_huffman: #self.ENABLE_HUFFMAN:
+#				n |= 0x80
+#			output[0] = 0x56
+#			output[1] = 0x47
+#			output[2] = 0x43
+#			output[3] = n
 
+
+		# Step 2 - LZ4 Compress the 8 data streams
 		compressedStreams = []
-
 		origStreamDecodeDebug = []
 
-		# LZ4 Compress the 8 data streams
 		for i in range(len(streams)):
 			origStreamDecodeDebug.append([])
-			#print("lz4 compressing stream #" + str(i))
 			stream = streams[i]
 			compressed_block = lz4.compressBlock( stream )
 			self.testUnpackLZ4(compressed_block, stream, origStreamDecodeDebug[i])
-
 			compressedStreams.append(compressed_block)
 
-
-		# Step 3 - Huffcode these streams (optional - better ratio, lower decoder performance)
-		if use_huffman: #self.ENABLE_HUFFMAN:
-
-			huffman = Huffman()
-			
-			# our decoder only supports upto 16-bit codes.
-			huffman.MAX_CODE_BIT_LENGTH = 16
-
-			# analyse the compressed data stream
-			compressed_data = bytearray()
-			for s in compressedStreams:
-				compressed_data += s[4:] # skip block headers so we dont add unwanted symbols to the alphabet
-			# build the optimal code tree
-			huffman.build(compressed_data)
-
-			# Create an uncompressed huffman table LZ4 block
-			header_block = huffman.addHeader(bytearray(), bytearray())
-			lz4.setCompression(0)
-			output += lz4.compressBlock( header_block )
-
-			# Emit huffman encoded blocks as uncompressed LZ4 blocks
-			for i in range(len(compressedStreams)):
-				s = compressedStreams[i][4:]
-				huffdata = huffman.encode( s, header = False ) # we skip the first 4 bytes of the LZ4 block (the block header)
-				print('   HUF Pack in=' + str(len(s)) + ', out=' + str(len(huffdata)) + ", saving=" + str(len(s)-len(huffdata)) )
-
-				compressedStreams[i] = lz4.compressBlock( huffdata )
-
 		# Step 4 - Serialise the blocks
-		for s in compressedStreams:
-			output += s
+#		for s in compressedStreams:
+#			output += s
 
 		# Step 5 - write the output file
-		lz4.endFrame(output)
-		self.report(lz4, data_block, output, 8, "Paired 8 register blocks [01][23][45][6][7][8][9][A] WITH register masks ")
+#		lz4.endFrame(output)
+#		self.report(lz4, data_block, output, 8, "Paired 8 register blocks [01][23][45][6][7][8][9][A] WITH register masks ")
 
 		# write the lz4 compressed file.
-		open(dst_filename, "wb").write( output )
+#		open(dst_filename, "wb").write( output )
 
 		# TODO: streams array contains the eight lz4-compressed
 		# streams. For each one need to know whether it's
@@ -943,14 +861,12 @@ class VgmPacker:
 			decoderContexts.append(self.DecoderContext(compressedStreams[streamsProcessingOrder[n]], interleavedOut, newStreamDecodeDebug[n]))
 			bytesPerValue.append(streamsBytesPerValue[n])
 		
-		#testStrean = 0
 		while decoderContexts[0].eof != True:
-			#for n in range(testStrean, testStrean + 1):
 			for n in range(8):				
 				rleLengths[n] -= 1
 				#print("Stream " + str(n) + " RLE count now " + str(rleLengths[n]))
 				if rleLengths[n] == 0 and not (decoderContexts[n].eof == True):
-					print("Stream " + str(n) + " decoding " + str(bytesPerValue[n]) + " bytes")
+					#print("Stream " + str(n) + " decoding " + str(bytesPerValue[n]) + " bytes")
 					origDbg = origStreamDecodeDebug[streamsProcessingOrder[n]]
 					newDbg = newStreamDecodeDebug[n]	
 					context = decoderContexts[n]
@@ -982,7 +898,7 @@ class VgmPacker:
 							assert origDbg[ri] == newDbg[ri]	
 						readIndices[n] = context.index - 4
 
-		open(dst_filename + ".interleaved", "wb").write( interleavedOut )
+		open(dst_filename, "wb").write( interleavedOut )
 
 		streamSize = 0
 
@@ -1003,14 +919,14 @@ import argparse
 # Determine if running as a script
 if __name__ == '__main__':
 
-	print("VgmPacker.py : VGM music compressor for 8-bit CPUs")
-	print("Written in 2019 by Simon Morris, https://github.com/simondotm/vgm-packer")
+	print("VgxPacker.py : VGM music compressor for 8-bit CPUs")
+	print("Original VGC scripts created by Simon Morris. VGX amendments by VectorEyes")
+	print("Based on original scripts found at https://github.com/simondotm/vgm-packer")
+	print("TODO URL for this (VGX) package")
 	print("")
 
 	epilog_string = "Notes:\n"
-	epilog_string += " Buffer size <256 bytes emits 8-bit LZ4 offsets, medium compression, faster decoding, 2Kb workspace\n"
-	epilog_string += " Buffer size >255 bytes emits 16-bit LZ4 offsets, higher compression, slower decoding, Size*8 workspace\n"
-	epilog_string += " Enabling huffman will result in slightly better compression, but slower and more variable decoding speed\n"
+	epilog_string += " Several options have been removed compared to original VGM scripts. Buffer size is fixed at 255, no Huffman option."
 
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1018,25 +934,22 @@ if __name__ == '__main__':
 
 	parser.add_argument("input", help="VGM source file (must be single SN76489 PSG format) [input]")
 	parser.add_argument("-o", "--output", metavar="<output>", help="write VGC file <output> (default is '[input].vgc')")
-	parser.add_argument("-b", "--buffer", type=int, default=255, metavar="<n>", help="Set decoder buffer size to <n> bytes, default: 255")
-	parser.add_argument("-n", "--huffman", help="Enable huffman compression", default=False, action="store_true")
 	parser.add_argument("-v", "--verbose", help="Enable verbose mode", action="store_true")
 	args = parser.parse_args()
-
 
 	src = args.input
 	dst = args.output
 	if dst == None:
-		dst = os.path.splitext(src)[0] + ".vgc"
+		dst = os.path.splitext(src)[0] + ".vgx"
 
 	# check for missing files
 	if not os.path.isfile(src):
 		print("ERROR: File '" + src + "' not found")
 		sys.exit()
 
-	packer = VgmPacker()
+	packer = VgxPacker()
 	packer.VERBOSE = args.verbose
-	packer.process(src, dst, args.buffer, args.huffman)
+	packer.process(src, dst)
 
 
 
