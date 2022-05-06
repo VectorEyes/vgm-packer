@@ -477,20 +477,25 @@ class VgmPacker:
 			prevRI = self.index
 			literal = self._getByte()
 			nowRI = self.index
-			self.debugOut.append("Literal," + str(literal) + ", LitCnt " + str(self.literalCount) + "->" + str(self.literalCount - 1) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 			self.unpacked.append(literal)
 			self.literalCount -= 1
+			self.debugOut.append("Literal," + str(literal) + ", LitCnt " + str(self.literalCount + 1) + "->" + str(self.literalCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
+
 			return literal
 
 		def fetch_match(self):
 #			offset = len(self.unpacked) - self.matchOffset
-			offset = len(self.unpacked) - self.matchOffset - 1
+			offset = len(self.unpacked) - self.matchOffset		
 			if offset >= len(self.unpacked) or offset < 0:
 				print("WARNING in fetch_match! ... len of unpacked is " + str(len(self.unpacked)) + ", offset is " + str(offset) + ", match_offset is " + str(self.matchOffset))
 				print("index: " + str(self.index) + ", matchCount: " + str(self.matchCount) + ", matchOffset: " + str(self.matchOffset))
+			print("About to try accessing list of len " + str(len(self.unpacked)) + " using index of " + str(offset))
 			match = self.unpacked[offset]
 			self.unpacked.append(match)
 			self.matchCount -= 1
+
+			self.debugOut.append("Match," + str(match) + ", Offset " + str(offset) + "->" + str(len(self.unpacked) - self.matchOffset) + ", MatchCnt " + str(self.matchCount + 1) + " -> " + str(self.matchCount) + ", ReadIndex " + str(self.index) + "->" + str(self.index))
+
 			return match
 
 		def fetch_count(self, firstByteCountValue, dbgPrefix):
@@ -499,8 +504,10 @@ class VgmPacker:
 				return firstByteCountValue
 			else:
 				while True:
+					prevRI = self.index
 					fetched = self._getByte()
-					self.debugOut.append(dbgPrefix + "CntExt," + str(fetched))
+					nowRI = self.index
+					self.debugOut.append(dbgPrefix + "CntExt," + str(fetched) + ", " + dbgPrefix + "Cnt " + str(accumulated) + "->" + str(accumulated + fetched) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
 					accumulated += fetched
 					if fetched != 255: break
@@ -510,8 +517,10 @@ class VgmPacker:
 		# This is called once a literal sequence has finished
 		def begin_matches(self):
 			# first fetch offset
+			prevRI = self.index
 			self.matchOffset = self._getByte()
-			self.debugOut.append("Offset," + str(self.matchOffset))
+			nowRI = self.index
+			self.debugOut.append("Offset," + str(self.matchOffset) + ", Len(unpacked) is " + str(len(self.unpacked)) + ", FinalOffset is " + str(len(self.unpacked) - self.matchOffset) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
 			# then length ... HERE!
 			self.matchCount = self.fetch_count(self.matchCount, "Match") + 4
@@ -536,13 +545,17 @@ class VgmPacker:
 				toReturn = self.fetch_match()
 			
 			else:
+				prevRI = self.index
 				token = self._getByte()
+				nowRI = self.index
 				self.matchCount = token & 15
 				tokenLiteralCnt = token >> 4
-				self.debugOut.append("Token," + str(tokenLiteralCnt) + "," + str(self.matchCount))
-				self.literalCount = self.fetch_count(tokenLiteralCnt, "Literal")
+				self.debugOut.append("Token," + str(tokenLiteralCnt) + "," + str(self.matchCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
+				self.literalCount = self.fetch_count(tokenLiteralCnt, "Lit")
 				if (self.literalCount != 0):
 					toReturn = self.fetch_literal()
+					if self.literalCount == 0 and (not self.eof == True):
+						self.begin_matches()					
 				else:
 					self.begin_matches()
 					toReturn = self.fetch_match()
@@ -574,19 +587,25 @@ class VgmPacker:
 				print("new token, unpacked offset=" + str(len(unpacked)))
 			prevRI = self.index
 			token = getByte()
-			newRI = self.index
-			# HERE HERE HERE add prevRI and new RI to the debug out below
+			nowRI = self.index
 			literal_count = token >> 4
 			match_count = token & 15
+			match_length = match_count
 			literal_length = literal_count
-			streamDebugList.append("Token," + str(literal_count) + "," + str(match_count))
-			if debug:
-				print("literal_count=" + str(literal_count) + ", literal_length=" + str(literal_length))
-			if (literal_count == 15):
+			streamDebugList.append("Token," + str(literal_count) + "," + str(match_count) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
+#			if debug:
+#				print("literal_count=" + str(literal_count) + ", literal_length=" + str(literal_length))
+
+			if literal_count == 15:
 				while True:
+					prevRI = self.index
 					literal_count = getByte()
+					nowRI = self.index
+					prevLitLen = literal_length
+
 					literal_length += literal_count
-					streamDebugList.append("LiteralCntExt," + str(literal_count))
+					newLitLen = literal_length
+					streamDebugList.append("LitCntExt," + str(literal_count) + ", LitCnt " + str(prevLitLen) + "->" + str(newLitLen) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
 					if debug:
 						print("literal_count=" + str(literal_count) + ", literal_length=" + str(literal_length))
@@ -617,16 +636,21 @@ class VgmPacker:
 				if debug:
 					print("match_count=" + str(match_count) + ", match_length=" + str(match_length))
 
+				prevRI = self.index
 				offset_token = getByte() # only 1 byte for offset in the LZ48 format
+				nowRI = self.index
 				if debug:
 					print("offset_token=" + str(offset_token))
 				offset = len(unpacked) - offset_token
-				streamDebugList.append("Offset," + str(offset_token))
+				streamDebugList.append("Offset," + str(offset_token) + ", Len(unpacked) is " + str(len(unpacked)) + ", FinalOffset is " + str(offset) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 				if (match_count == 15):
 					while True:
+						prevMatchLen = match_length
+						prevRI = self.index
 						match_count = getByte()
+						nowRI = self.index
 						match_length += match_count
-						streamDebugList.append("MatchCntExt," + str(match_count))
+						streamDebugList.append("MatchCntExt," + str(match_count) + ", MatchCnt " + str(prevMatchLen - 4) + "->" + str(match_length - 4) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 						if debug:
 							print("match_count=" + str(match_count) + ", match_length=" + str(match_length))
 
@@ -636,16 +660,17 @@ class VgmPacker:
 				if debug:
 					print("copy matches, offset=" + str(offset) + ", match_length=" + str(match_length))
 
-
-
 				# copy match sequence
 				for n in range(match_length):
+					oldOffset = offset
+					prevRI = self.index
 					byte = unpacked[offset]
+					nowRI = self.index
 					if debug:
 						print("match byte copy n=" + str(n) + ", from offset=" + str(offset) + ", to offset " + str(len(unpacked)) + ", with byte " + str(hex(byte)))
 					offset += 1
 					unpacked.append(byte)
-
+					streamDebugList.append("Match," + str(byte) + ", Offset " + str(oldOffset) + "->" + str(offset) + ", MatchCnt " + str(match_length - n) + " -> " + str(match_length - n - 1) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
 		# check the results
 		assert len(unpacked) == len(uncompressed)
@@ -914,11 +939,12 @@ class VgmPacker:
 			decoderContexts.append(self.DecoderContext(compressedStreams[streamsProcessingOrder[n]], interleavedOut, newStreamDecodeDebug[n]))
 			bytesPerValue.append(streamsBytesPerValue[n])
 		
-		testStrean = 0
-		while decoderContexts[testStrean].eof != True:
-			for n in range(testStrean, testStrean + 1):
+		#testStrean = 0
+		while decoderContexts[0].eof != True:
+			#for n in range(testStrean, testStrean + 1):
+			for n in range(8):				
 				rleLengths[n] -= 1
-				print("Stream " + str(n) + " RLE count now " + str(rleLengths[n]))
+				#print("Stream " + str(n) + " RLE count now " + str(rleLengths[n]))
 				if rleLengths[n] == 0 and not (decoderContexts[n].eof == True):
 					print("Stream " + str(n) + " decoding " + str(bytesPerValue[n]) + " bytes")
 					origDbg = origStreamDecodeDebug[streamsProcessingOrder[n]]
