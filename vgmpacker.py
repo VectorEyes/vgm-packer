@@ -481,6 +481,9 @@ class VgmPacker:
 			self.literalCount -= 1
 			self.debugOut.append("Literal," + str(literal) + ", LitCnt " + str(self.literalCount + 1) + "->" + str(self.literalCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
+			if self.literalCount == 0 and (not self.eof == True):
+				self.begin_matches()	
+
 			return literal
 
 		def fetch_match(self):
@@ -538,8 +541,6 @@ class VgmPacker:
 			# then begin matches
 			if self.literalCount != 0:
 				toReturn = self.fetch_literal()
-				if self.literalCount == 0 and (not self.eof == True):
-					self.begin_matches()
 
 			elif self.matchCount != 0:
 				toReturn = self.fetch_match()
@@ -553,9 +554,7 @@ class VgmPacker:
 				self.debugOut.append("Token," + str(tokenLiteralCnt) + "," + str(self.matchCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 				self.literalCount = self.fetch_count(tokenLiteralCnt, "Lit")
 				if (self.literalCount != 0):
-					toReturn = self.fetch_literal()
-					if self.literalCount == 0 and (not self.eof == True):
-						self.begin_matches()					
+					toReturn = self.fetch_literal()				
 				else:
 					self.begin_matches()
 					toReturn = self.fetch_match()
