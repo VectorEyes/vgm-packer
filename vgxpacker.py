@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# vgmpacker.py
+# vgxpacker.py
 # Compression tool for optimal packing of SN76489-based PSG VGM data for use on 8-bit CPUs
 # By Simon Morris (https://github.com/simondotm/)
 # See https://github.com/simondotm/vgm-packer
@@ -25,7 +25,6 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-
 # Packing SN76489 VGM data into the most efficient storage format requires:
 #  1. Interleaved data unpacked into serialized data per register
 #  2. Tone registers 0/1/2 packed as three separate 16-bit data series
@@ -49,14 +48,12 @@ import operator
 import os
 
 from modules.lz4enc import LZ4 
-from modules.huffman import Huffman
 from modules.vgmparser import VgmStream
 
 class VgxPacker:
 
 	# pack options
-	OUTPUT_RAWDATA = False # output raw dumps of the data that was compressed by LZ4/Huffman
-	RLE = True # always set now.
+	OUTPUT_RAWDATA = False # output raw dumps of the data prior to LZ4 compression
 	VERBOSE = True
 
 	def __init__(self):
@@ -67,17 +64,12 @@ class VgxPacker:
 	# Utilities
 	#----------------------------------------------------------
 
-
 	# split the packed raw data into 11 separate streams
 	# returns array of 11 bytearrays
 	def split_raw(self, rawData, stripCommands = True):
 
 		registers = [ 0 ] * 11 
-		registers_opt = [ 0 ] * 11
-
 		latched_channel = -1
-
-		output_block = bytearray()
 		output_blocks = []
 
 		for o in range(11):
@@ -131,31 +123,12 @@ class VgxPacker:
 						if latched_channel == 3:
 							print("ERROR CHANNEL")
 
-
-
-
-
 				# emit current state of each of the 11 registers to 11 different bytearrays
 				for x in range(11):
 					output_blocks[x].append( registers[x] )
 
 				# next packet                
 				n += packet_size
-
-		#print(output_blocks[6])
-
-		#IGNORE we no longer do this - let the decoder do it instead.
-		if False:
-			# make sure we only emit tone3 when it changes, or 15 for no-change
-			# this prevents the LFSR from being reset
-			lastTone3 = 255  
-			for x in range(len(output_blocks[6])):
-				t = output_blocks[6][x]
-				if t == lastTone3:
-					output_blocks[6][x] = 15
-				lastTone3 = t
-
-		#    print(output_blocks[6])
 
 		# Add EOF marker (0x08) to tone3 byte stream
 		output_blocks[6].append(0x08)	# 0x08 is an invalid noise tone.
@@ -164,9 +137,8 @@ class VgxPacker:
 		return output_blocks
 
 
-
 	# return string with byte overhead of n blocks on decoder side
-	def overhead(self, n):
+	def overhead(self, lz4, n):
 		return " (" + str(n*lz4.getWindowSize()) + " bytes overhead)"
 
 	# report stats from block_in and block_out compression ration, block_count indicates overhead, and msg is the description
@@ -209,8 +181,6 @@ class VgxPacker:
 				r = combination[y]
 				buffer.append( registers[r][x] )
 		return buffer
-
-
 
 
 	# given a block of bytes of 4-bit values, compress two bytes to 1
@@ -269,10 +239,6 @@ class VgxPacker:
 	# apply simple RLE encoding to a block of 4-bit tone or volume data
 	# run length encoded into top 4-bits. 0=no repeat, 15=15 repeats.
 	def rle(self, block):
-		#return block
-		if not self.RLE:
-			return block
-
 		rle_block = bytearray()
 		n = 0
 		while (n < len(block)):
@@ -319,10 +285,6 @@ class VgxPacker:
 	# apply simple RLE encoding to a block of 12-bit tone data (stored as 16-bit words)
 	# run length encoded into top 4-bits. 0=no repeat, 15=15 repeats.
 	def rle2(self, block):
-
-		if not self.RLE:
-			return block
-
 		rle_block = bytearray()
 		n = 0
 		while (n < len(block)):
@@ -383,7 +345,7 @@ class VgxPacker:
 
 
 
-	def frequencies(self, showData):
+	def frequencies(self, lz4, showData):
 		tokens = lz4.stats["tokens"]
 		offsets = lz4.stats["offsets"]
 		lengths = lz4.stats["lengths"]
@@ -444,6 +406,9 @@ class VgxPacker:
 				r.append(v >> 8)
 		return r
 
+	# Class for simulating a state-machine-based LZ4 decoder, that can provide one *output*
+	# byte at a time, maintain the LZ4 decoder state, and emit the bytes that were pulled
+	# from the *source compressed# stream to a separate buffer.
 	class DecoderContext:
 		def __init__(self, compressedSource, interleavedSourceOutput, debugOut):
 			self.index = 4
@@ -465,10 +430,7 @@ class VgxPacker:
 				self.eof = True
 			return byte
 
-		def _getDbgState(self):
-			return "ReadIndex:" + str(self.index) + ", UnpackLen:" + str(len(self.unpacked)) + ",LitCnt:" + str(self.literalCount) + ",MtchCnt:" + str(self.matchCount) + ",MtchOffset:" + str(self.matchOffset)
-
-		def fetch_literal(self):
+		def _fetch_literal(self):
 			prevRI = self.index
 			literal = self._getByte()
 			nowRI = self.index
@@ -476,18 +438,20 @@ class VgxPacker:
 			self.literalCount -= 1
 			self.debugOut.append("Literal," + str(literal) + ", LitCnt " + str(self.literalCount + 1) + "->" + str(self.literalCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
+			# if this was last literal (literal count has dropped to zero)
+			# then begin matches
+
 			if self.literalCount == 0 and (not self.eof == True):
-				self.begin_matches()	
+				self._begin_matches()	
 
 			return literal
 
-		def fetch_match(self):
+		def _fetch_match(self):
 #			offset = len(self.unpacked) - self.matchOffset
 			offset = len(self.unpacked) - self.matchOffset		
 			if offset >= len(self.unpacked) or offset < 0:
 				print("WARNING in fetch_match! ... len of unpacked is " + str(len(self.unpacked)) + ", offset is " + str(offset) + ", match_offset is " + str(self.matchOffset))
 				print("index: " + str(self.index) + ", matchCount: " + str(self.matchCount) + ", matchOffset: " + str(self.matchOffset))
-			print("About to try accessing list of len " + str(len(self.unpacked)) + " using index of " + str(offset))
 			match = self.unpacked[offset]
 			self.unpacked.append(match)
 			self.matchCount -= 1
@@ -496,7 +460,7 @@ class VgxPacker:
 
 			return match
 
-		def fetch_count(self, firstByteCountValue, dbgPrefix):
+		def _fetch_count(self, firstByteCountValue, dbgPrefix):
 			accumulated = firstByteCountValue
 			if firstByteCountValue != 15:
 				return firstByteCountValue
@@ -513,15 +477,15 @@ class VgxPacker:
 			return accumulated
 
 		# This is called once a literal sequence has finished
-		def begin_matches(self):
+		def _begin_matches(self):
 			# first fetch offset
 			prevRI = self.index
 			self.matchOffset = self._getByte()
 			nowRI = self.index
 			self.debugOut.append("Offset," + str(self.matchOffset) + ", Len(unpacked) is " + str(len(self.unpacked)) + ", FinalOffset is " + str(len(self.unpacked) - self.matchOffset) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 
-			# then length ... HERE!
-			self.matchCount = self.fetch_count(self.matchCount, "Match") + 4
+			# then length
+			self.matchCount = self._fetch_count(self.matchCount, "Match") + 4
 
 		def getByteAndWriteConsumedFromSourceToInterleaved(self):
 			if self.eof:
@@ -531,15 +495,16 @@ class VgxPacker:
 
 			toReturn = 0
 
-			# if literal count not zero, fetch literal.
-			# if this was last literal (literal count has dropped to zero)
-			# then begin matches
+			# If we still have literals to fetch, then fetch a literal.
+			# (This will call _begin_matches if literal count drop to zero)
 			if self.literalCount != 0:
-				toReturn = self.fetch_literal()
+				toReturn = self._fetch_literal()
 
+			# OK, we didn't need to fetch a literal. Do we need to fetch a match byte?
 			elif self.matchCount != 0:
-				toReturn = self.fetch_match()
+				toReturn = self._fetch_match()
 			
+			# If no literals or matches to fetch, then we have to process a token byte.
 			else:
 				prevRI = self.index
 				token = self._getByte()
@@ -549,14 +514,15 @@ class VgxPacker:
 				self.debugOut.append("Token," + str(tokenLiteralCnt) + "," + str(self.matchCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
 				self.literalCount = self.fetch_count(tokenLiteralCnt, "Lit")
 				if (self.literalCount != 0):
-					toReturn = self.fetch_literal()				
+					toReturn = self._fetch_literal()				
 				else:
-					self.begin_matches()
-					toReturn = self.fetch_match()
+					self._begin_matches()
+					toReturn = self._fetch_match()
 
 			readPtrIndexAtEnd = self.index
 
-			# Copy bytes that were consumed
+			# Copy bytes that were consumed from source compressed LZ4 stream
+			# to output interleaved stream
 			for n in range(readPtrIndexAtStart, readPtrIndexAtEnd):
 				self.interleaved.append(self.compressed[n])
 
@@ -672,10 +638,6 @@ class VgxPacker:
 		print(" Test LZ4 unpack passed. \n")
 
 
-
-
-
-
 	#----------------------------------------------------------
 	# Process(filename)
 	# Convert the given VGM file to a compressd VGC file
@@ -741,9 +703,7 @@ class VgxPacker:
 		# - ... has no LZ4 frame or LZ4 block headers.
 		# - ... does not support additional Huffman compression.
 		# - ... does not provide an option to control the match window size, it is locked at 255
-		# - ... and there are no plans to look into 16-bit offsets.
 		
-
 		lz4 = LZ4()
 		# enable the high compression mode
 		lz4.setCompression(9)
@@ -813,20 +773,9 @@ class VgxPacker:
 			self.testUnpackLZ4(compressed_block, stream, origStreamDecodeDebug[i])
 			compressedStreams.append(compressed_block)
 
-		# Step 4 - Serialise the blocks
-#		for s in compressedStreams:
-#			output += s
-
-		# Step 5 - write the output file
-#		lz4.endFrame(output)
-#		self.report(lz4, data_block, output, 8, "Paired 8 register blocks [01][23][45][6][7][8][9][A] WITH register masks ")
-
-		# write the lz4 compressed file.
-#		open(dst_filename, "wb").write( output )
-
-		# TODO: streams array contains the eight lz4-compressed
-		# streams. For each one need to know whether it's
-		# one- or two-byte, also its order of processing.
+		# Step 3 - 'replay' the streams, pulling byes from the compressed streams in the
+		# exact same order that they're pulled by the Beeb/6502 VGXPlayer. Record the bytes
+		# that are pulled into another buffer.
 		# Then simply do:
 		# - create interleaved byte array
 		# - create 8 decoder contexts
@@ -836,6 +785,9 @@ class VgxPacker:
 		# - IF got to zero, fetch byte, extract top/bottom ? 4 bits, add one
 		#, that is new counter. If is TWO-BYTE stream fetch a second byte!
 
+		# Streams array contains the eight lz4-compressed
+		# streams. For each one need to know whether it's
+		# one- or two-byte, and its order of processing.
 		streamsProcessingOrder = [3, 7, 0, 1, 2, 4, 5, 6]
 		streamsBytesPerValue = [1, 1, 2, 2, 2, 1, 1, 1]
 
@@ -849,17 +801,15 @@ class VgxPacker:
 
 		rleLengths = [1] * 8
 		decoderContexts = []
-		bytesPerValue = []
 
+		# Used for debugging, comparing the simulated stateful LZ4 decoder with the
+		# original implementation from Simon.
 		newStreamDecodeDebug = [[],[],[],[],[],[],[],[]]
-		stateDbg = [[],[],[],[],[],[],[],[]]
-
 		readIndices = [0] * 8
 
 		for n in range(8):
 			newStreamDecodeDebug.append([])
 			decoderContexts.append(self.DecoderContext(compressedStreams[streamsProcessingOrder[n]], interleavedOut, newStreamDecodeDebug[n]))
-			bytesPerValue.append(streamsBytesPerValue[n])
 		
 		while decoderContexts[0].eof != True:
 			for n in range(8):				
@@ -871,7 +821,6 @@ class VgxPacker:
 					newDbg = newStreamDecodeDebug[n]	
 					context = decoderContexts[n]
 					firstByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
-					stateDbg[n].append(context._getDbgState())
 					print("Stream " + str(n) + ": After first byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
 					print("Stream " + str(n) + ": origDbgLen: " + str(len(origDbg)) + ", newDbgLen: " + str(len(newDbg)))
 
@@ -886,7 +835,7 @@ class VgxPacker:
 
 					rleLengths[n] = (firstByte >> 4) + 1
 					print("Stream " + str(n) + " set RLE length to " + str(rleLengths[n]))
-					if bytesPerValue[n] == 2:
+					if streamsBytesPerValue[n] == 2:
 						secondByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
 						print("Stream " + str(n) + ": After second byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
 
@@ -933,7 +882,7 @@ if __name__ == '__main__':
 		epilog=epilog_string)
 
 	parser.add_argument("input", help="VGM source file (must be single SN76489 PSG format) [input]")
-	parser.add_argument("-o", "--output", metavar="<output>", help="write VGC file <output> (default is '[input].vgc')")
+	parser.add_argument("-o", "--output", metavar="<output>", help="write VGX file <output> (default is '[input].vgx')")
 	parser.add_argument("-v", "--verbose", help="Enable verbose mode", action="store_true")
 	args = parser.parse_args()
 
