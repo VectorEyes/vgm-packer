@@ -50,11 +50,20 @@ import os
 from modules.lz4enc import LZ4 
 from modules.vgmparser import VgmStream
 
+# Make this true to enable loads of debug spew, mostly useful when changing the script or debugging difficult issues
+DEBUG = False
+
+def debugPrint(debugString):
+	if DEBUG:
+		print(debugString)
+
 class VgxPacker:
 
 	# pack options
 	OUTPUT_RAWDATA = False # output raw dumps of the data prior to LZ4 compression
 	VERBOSE = True
+
+
 
 	def __init__(self):
 		print("init")
@@ -63,6 +72,8 @@ class VgxPacker:
 	#----------------------------------------------------------
 	# Utilities
 	#----------------------------------------------------------
+
+
 
 	# split the packed raw data into 11 separate streams
 	# returns array of 11 bytearrays
@@ -426,7 +437,7 @@ class VgxPacker:
 			byte = self.compressed[self.index]
 			self.index += 1
 			if self.index >= len(self.compressed):
-				print("EOF TRUE at index: " + str(self.index))
+				debugPrint("EOF TRUE at index: " + str(self.index))
 				self.eof = True
 			return byte
 
@@ -451,7 +462,7 @@ class VgxPacker:
 			offset = len(self.unpacked) - self.matchOffset		
 			if offset >= len(self.unpacked) or offset < 0:
 				print("WARNING in fetch_match! ... len of unpacked is " + str(len(self.unpacked)) + ", offset is " + str(offset) + ", match_offset is " + str(self.matchOffset))
-				print("index: " + str(self.index) + ", matchCount: " + str(self.matchCount) + ", matchOffset: " + str(self.matchOffset))
+				debugPrint("index: " + str(self.index) + ", matchCount: " + str(self.matchCount) + ", matchOffset: " + str(self.matchOffset))
 			match = self.unpacked[offset]
 			self.unpacked.append(match)
 			self.matchCount -= 1
@@ -512,7 +523,7 @@ class VgxPacker:
 				self.matchCount = token & 15
 				tokenLiteralCnt = token >> 4
 				self.debugOut.append("Token," + str(tokenLiteralCnt) + "," + str(self.matchCount) + ", ReadIndex " + str(prevRI) + "->" + str(nowRI))
-				self.literalCount = self.fetch_count(tokenLiteralCnt, "Lit")
+				self.literalCount = self._fetch_count(tokenLiteralCnt, "Lit")
 				if (self.literalCount != 0):
 					toReturn = self._fetch_literal()				
 				else:
@@ -821,33 +832,31 @@ class VgxPacker:
 					newDbg = newStreamDecodeDebug[n]	
 					context = decoderContexts[n]
 					firstByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
-					print("Stream " + str(n) + ": After first byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
-					print("Stream " + str(n) + ": origDbgLen: " + str(len(origDbg)) + ", newDbgLen: " + str(len(newDbg)))
+					debugPrint("Stream " + str(n) + ": After first byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
+					debugPrint("Stream " + str(n) + ": origDbgLen: " + str(len(origDbg)) + ", newDbgLen: " + str(len(newDbg)))
 
 					for ri in range(readIndices[n], context.index - 4):
 						if origDbg[ri] == newDbg[ri]:
-							print("Stream " + str(n) + ": OK -  srcIndex " + str(ri) +": " + origDbg[ri])
+							debugPrint("Stream " + str(n) + ": OK -  srcIndex " + str(ri) +": " + origDbg[ri])
 						else:
-							print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
+							debugPrint("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
 						assert origDbg[ri] == newDbg[ri]
 
 					readIndices[n] = context.index - 4
 
 					rleLengths[n] = (firstByte >> 4) + 1
-					print("Stream " + str(n) + " set RLE length to " + str(rleLengths[n]))
+					debugPrint("Stream " + str(n) + " set RLE length to " + str(rleLengths[n]))
 					if streamsBytesPerValue[n] == 2:
 						secondByte = context.getByteAndWriteConsumedFromSourceToInterleaved()
-						print("Stream " + str(n) + ": After second byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
+						debugPrint("Stream " + str(n) + ": After second byte ri: " + str(readIndices[n]) + ", context index: " + str(context.index - 4))
 
 						for ri in range(readIndices[n], context.index - 4):
 							if origDbg[ri] == newDbg[ri]:
-								print("Stream " + str(n) + ": OK - srcIndex " + str(ri) +": " + origDbg[ri])
+								debugPrint("Stream " + str(n) + ": OK - srcIndex " + str(ri) +": " + origDbg[ri])
 							else:
-								print("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
+								debugPrint("Stream " + str(n) + ": MISMATCH - srcIndex " + str(ri) +": Orig: " + origDbg[ri] + ", New: " + newDbg[ri])
 							assert origDbg[ri] == newDbg[ri]	
 						readIndices[n] = context.index - 4
-
-		open(dst_filename, "wb").write( interleavedOut )
 
 		streamSize = 0
 
@@ -856,6 +865,10 @@ class VgxPacker:
 
 		print("Sum of stream sizes: " + str(streamSize) + " bytes.")
 		print("Interleaved output size: " + str(len(interleavedOut)) + " bytes." )
+
+		print("Writing file: " + dst_filename)
+		open(dst_filename, "wb").write( interleavedOut )
+
 
 #------------------------------------------------------------------------
 # Main()
