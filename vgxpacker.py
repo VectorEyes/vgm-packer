@@ -458,7 +458,6 @@ class VgxPacker:
 			return literal
 
 		def _fetch_match(self):
-#			offset = len(self.unpacked) - self.matchOffset
 			offset = len(self.unpacked) - self.matchOffset		
 			if offset >= len(self.unpacked) or offset < 0:
 				print("WARNING in fetch_match! ... len of unpacked is " + str(len(self.unpacked)) + ", offset is " + str(offset) + ", match_offset is " + str(self.matchOffset))
@@ -714,6 +713,13 @@ class VgxPacker:
 		# - ... has no LZ4 frame or LZ4 block headers.
 		# - ... does not support additional Huffman compression.
 		# - ... does not provide an option to control the match window size, it is locked at 255
+
+		# However it improves on VGM in the following ways:
+		# - It's slightly smaller, because there are no block headers.
+		# - The runtime cost is lower, because it does not have to maintain eight separate read pointers.
+		# - Reduced zero-page requirements at runtime, for same reason as above.
+		# - Because it is reading sequentially from one buffer, it is easier to 'stream' large songs which
+		#     are larger than the buffer space available.
 		
 		lz4 = LZ4()
 		# enable the high compression mode
