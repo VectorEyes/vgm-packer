@@ -496,7 +496,7 @@ class LZ4():
     # write a byte array to the output buffer, data can be a byte or a byte array
     def sendBytes(data):
       if len(data) == 1:
-        outputData.append(data)
+        outputData.extend(data)
       else:
         outputData.extend(data)
 
@@ -848,16 +848,16 @@ class LZ4():
       
     # flags
     # (7-6) FieldName	Version (5)	B.Indep (4)	B.Checksum (3)	C.Size (2)	C.Checksum (1) Reserved (0)	DictID
-    flags = 1 << 6 # Version, dependent blocks, no block checksum, no size, no content checksum, no dict ID 
-    outputBuffer.append( struct.pack('B', flags) )
+    flags = 1 << 6 # Version, dependent blocks, no block checksum, no size, no content checksum, no dict ID
+    outputBuffer.extend( struct.pack('B', flags) )
 
     # max blocksize
     maxBlockSizeId = self.MaxBlockSizeId << 4
-    outputBuffer.append( struct.pack('B', maxBlockSizeId) )
+    outputBuffer.extend( struct.pack('B', maxBlockSizeId) )
     
     # header checksum (precomputed)
     checksum = 0xDF
-    outputBuffer.append( struct.pack('B', checksum) )
+    outputBuffer.extend( struct.pack('B', checksum) )
 
     # reset stats for each frame
     # (can be manually called per-block also if desired)
